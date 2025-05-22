@@ -1,0 +1,14 @@
+{
+  "name": "monad-snake-secure",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.14.1"
+  }
+}

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Monad Snake Game</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.8.1/ethers.umd.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <!-- Overlay -->
+  <div id="overlay" class="overlay hidden">
+    <div class="panel" id="connect-panel">
+      <h2>Connect Wallet</h2>
+      <button id="connect-btn">Connect</button>
+    </div>
+
+    <div class="panel hidden" id="pay-panel">
+      <h2>Pay 0.1 MON to Play</h2>
+      <button id="pay-btn">Pay & Start</button>
+    </div>
+
+    <div class="panel hidden" id="gameover-panel">
+      <h2>Game Over</h2>
+      <p id="summary"></p>
+      <button id="claim-btn">Claim Tokens</button>
+      <button id="restart-btn">Restart</button>
+    </div>
+  </div>
+
+  <!-- Game -->
+  <canvas id="game"></canvas>
+  <div id="score">Score: 0</div>
+  <div id="hearts" style="display:flex;gap:4px;justify-content:center;margin-top:4px;"></div>
+<div id="bar"></div>
+
+  <script type="module" src="script.js"></script>
+</body>
+</html>
