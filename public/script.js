@@ -1,330 +1,309 @@
+/* ------------------------------------------------------------------ */
+/*  MONAD SNAKE – full client script (May 2025 secure edition)        */
+/* ------------------------------------------------------------------ */
+
 import { ethers } from "https://cdnjs.cloudflare.com/ajax/libs/ethers/6.8.1/ethers.min.js";
 
 /* ---------- NETWORK & PAYMENT CONFIG ---------- */
 const MONAD_PARAMS = {
-  chainId: '0x279f', // 10143
+  chainId: '0x279f',                 // 10143
   chainName: 'Monad Testnet',
   nativeCurrency: { name: 'Monad Coin', symbol: 'MON', decimals: 18 },
   rpcUrls: ['https://testnet-rpc.monad.xyz'],
   blockExplorerUrls: ['https://testnet.monadexplorer.com']
 };
 const CHAIN_ID_DEC = 10143;
-const PAY_AMOUNT = "0.15";             // in MON
-const TREASURY = "0xD45005C45b8b6cBF642CB480A87e2C9e412B724E";  // <-- replace with your address
+
+let PAY_AMOUNT = "0.15";             // ↓ overridden at runtime
+let TREASURY   = "0xD45005C45b8b6cBF642CB480A87e2C9e412B724E";
 
 /* ---------- TOKEN CONFIG ---------- */
 const TOKENS = [
-  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/6679b698-a845-412b-504b-23463a3e1900/public',
-    label:'YAKI', inc:1, text:'+1 $YAKI', address:'0xfe140e1dCe99Be9F4F15d657CD9b7BF622270C50', img:null },
-  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/5d1206c2-042c-4edc-9f8b-dcef2e9e8f00/public',
-    label:'CHOG', inc:1, text:'+1 $CHOG', address:'0xE0590015A873bF326bd645c3E1266d4db41C4E6B', img:null },
-  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/27759359-9374-4995-341c-b2636a432800/public',
-    label:'DAK',  inc: 0.01, text:'+0.01 $DAK',  address:'0x0F0BDEbF0F83cD1EE3974779Bcb7315f9808c714', img:null },
-  { src:'https://docs.monad.xyz/img/monad_logo.png', label:'MON', inc:0.01, text:'',address:null,img:null,special:true }
+  { label:'DAK', inc:0.01, address:'0xb2f82D0f38dc453D596Ad40A37799446Cc89274A', decimals:18, color:'#ffbb33' },
+  { label:'CHOG',inc:0.01, address:'0xE0590015A873bF326bd645c3E1266d4db41C4E6B', decimals:18, color:'#3af' },
+  { label:'MON', inc:0.01, address:'0xaEef2f6B429Cb59C9B2D7bB2141ADa993E8571c3', decimals:18, color:'#e33' }
 ];
 
-const ERC20_ABI = [
-  "function mint(address to, uint256 amount) public returns (bool)",
-  "function transfer(address to, uint256 amount) public returns (bool)",
-  "function decimals() view returns (uint8)"
-];
+/* ---------- RUNTIME CONFIG (/.env via server) ---------- */
+fetch('/config.json')
+  .then(r=>r.ok?r.json():{})
+  .then(c=>{
+    if(c.PAY_AMOUNT) PAY_AMOUNT = c.PAY_AMOUNT.toString();
+    if(c.TREASURY)   TREASURY   = c.TREASURY;
+  })
+  .catch(()=>{});
 
 /* ---------- UI ELEMENTS ---------- */
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const overlay = document.getElementById('overlay');
-const connectPanel = document.getElementById('connect-panel');
-const payPanel = document.getElementById('pay-panel');
+const canvas        = document.getElementById('game');
+const ctx           = canvas.getContext('2d');
+const overlay       = document.getElementById('overlay');
+const connectPanel  = document.getElementById('connect-panel');
+const payPanel      = document.getElementById('pay-panel');
 const gameoverPanel = document.getElementById('gameover-panel');
-const connectBtn = document.getElementById('connect-btn');
-const payBtn = document.getElementById('pay-btn');
-const claimBtn = document.getElementById('claim-btn');
-const restartBtn = document.getElementById('restart-btn');
-const summaryP = document.getElementById('summary');
+const connectBtn    = document.getElementById('connect-btn');
+const payBtn        = document.getElementById('pay-btn');
+const claimBtn      = document.getElementById('claim-btn');
+const restartBtn    = document.getElementById('restart-btn');
 
-/* ---------- WALLET HANDLING ---------- */
-let provider, signer, userAddress;
+/* ---------- GLOBAL STATE ---------- */
+let provider, signer, playerAddr;
+let alive  = false;
+const counts = { DAK:0, CHOG:0, MON:0 };
 
-async function ensureMonadNetwork(){
+const CELL = 32, STEP = 50;          // 50 ms per tick
+let ROWS, COLS, snake, dir, nextDir, food, specialTimer;
+const MAX_HEARTS = 3;
+let hearts = MAX_HEARTS;
+
+/* ---------- INIT ---------- */
+function resize(){
+  COLS = Math.floor(window.innerWidth  / CELL);
+  ROWS = Math.floor((window.innerHeight-60) / CELL);   // 60 px bar
+  canvas.width  = COLS * CELL;
+  canvas.height = ROWS * CELL;
+}
+window.addEventListener('resize', resize);
+resize();
+
+initBar();
+initHearts();
+draw();                       // blank screen
+
+/* ---------- WALLET FLOW ---------- */
+connectBtn.onclick = async ()=>{
   try{
-    // Try to switch
-    await window.ethereum.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: MONAD_PARAMS.chainId }]
-    });
-  }catch(switchErr){
-    // If not found, try adding
-    if(switchErr.code === 4902){
-      await window.ethereum.request({
-        method: 'wallet_addEthereumChain',
-        params: [ MONAD_PARAMS ]
-      });
-    }else{
-      throw switchErr;
-    }
-  }
-}
+    if(!window.ethereum) throw new Error("Install Metamask");
+    await window.ethereum.request({ method:'wallet_addEthereumChain', params:[MONAD_PARAMS] });
+    await window.ethereum.request({ method:'wallet_switchEthereumChain', params:[{chainId: MONAD_PARAMS.chainId}] });
 
-async function connectWallet(){
-  if(!window.ethereum){
-    alert("Please install MetaMask (or another EVM wallet).");
-    return;
+    provider   = new ethers.BrowserProvider(window.ethereum);
+    signer     = await provider.getSigner();
+    playerAddr = await signer.getAddress();
+
+    connectPanel.classList.add('hidden');
+    payPanel.classList.remove('hidden');
+  }catch(e){
+    alert(e.message || "Wallet error");
   }
-  await ensureMonadNetwork();
-  provider = new ethers.BrowserProvider(window.ethereum);
-  const [addr] = await provider.send("eth_requestAccounts", []);
-  userAddress = ethers.getAddress(addr);
-  const net = await provider.getNetwork();
-  if(Number(net.chainId) !== CHAIN_ID_DEC){
-    alert("Failed to switch to Monad Testnet. Try manually via your wallet.");
-    throw new Error("Wrong network");
-  }
-  signer = await provider.getSigner();
-  connectPanel.classList.add('hidden');
-  payPanel.classList.remove('hidden');
-}
+};
+
+payBtn.onclick = payToPlay;
 
 async function payToPlay(){
+  payBtn.disabled = true;
   try{
     const tx = await signer.sendTransaction({
       to: TREASURY,
-      value: ethers.parseEther(PAY_AMOUNT)
+      value: ethers.parseUnits(PAY_AMOUNT, 18)
     });
     await tx.wait();
-      // mark as sent so retries only send remaining
-overlay.classList.add('hidden');
-    initBar();
-  initHearts();
+
+    overlay.classList.add('hidden');
+    payPanel.classList.add('hidden');
+    alive = true;
     startGame();
   }catch(e){
     console.error(e);
     alert("Transaction failed or was rejected.");
+    payBtn.disabled = false;
   }
 }
 
-/* ---------- GAME ENGINE (same as v5, trimmed) ---------- */
-const CELL=32, STEP=50;
-const BAR_PX=60; // height of token bar in pixels
-let COLS, ROWS;
-function resize(){
-  canvas.width=Math.floor(window.innerWidth/CELL)*CELL;
-  canvas.height=Math.floor((window.innerHeight - BAR_PX)/CELL)*CELL;
-  COLS=canvas.width/CELL; ROWS=canvas.height/CELL;
-}
-window.addEventListener('resize',resize); resize();
+/* ---------- CLAIM FLOW ---------- */
+claimBtn.onclick = claimTokens;
 
-const MAX_HEARTS=3;
-let hearts=MAX_HEARTS;
+async function claimTokens(){
+  claimBtn.disabled = true;
+  try{
+    const res = await fetch('/claim', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ address: playerAddr, counts })
+    });
+    const j = await res.json();
+    if(!j.ok) throw new Error(j.error || 'claim failed');
 
-const counts = {YAKI:0, CHOG:0, DAK:0, MON:0};
-let snake, dir, nextDir, food, specialFood, score, alive=false;
-
-function resetGame(){
-  snake=[{x:Math.floor(COLS/2), y:Math.floor(ROWS/2)}];
-  dir={x:1,y:0}; nextDir={...dir}; score=0;
-  food=null; specialFood=null;
-  Object.keys(counts).forEach(k=>counts[k]=0);
-  hearts=MAX_HEARTS; initHearts();
-}
-
-function randPos(){ return {x:Math.floor(Math.random()*COLS), y:Math.floor(Math.random()*ROWS)}; }
-
-async function loadImageBlob(url){
-  const res=await fetch(url); const blob=await res.blob();
-  const img=new Image(); img.src=URL.createObjectURL(blob);
-  await new Promise(r=>img.onload=r); return img;
+    // zero the bar
+    Object.keys(counts).forEach(k=>counts[k]=0);
+    updateBar();
+    alert('Rewards sent!\n'+j.hashes.join('\n'));
+  }catch(e){
+    alert(e.message||'claim failed');
+  }
+  claimBtn.disabled = false;
 }
 
-async function loadAssets(){
-  const imgs=await Promise.all(TOKENS.map(t=>loadImageBlob(t.src).catch(()=>null)));
-  imgs.forEach((img,i)=>TOKENS[i].img=img);
-}
-
-function spawnFood(){
-  const normals=TOKENS.filter(t=>!t.special&&t.img);
-  if(!normals.length) return;
-  const token=normals[Math.floor(Math.random()*normals.length)];
-  let p;
-  do{p=randPos();}while(snake.some(s=>s.x===p.x&&s.y===p.y));
-  food={...p,token};
-}
-
-function spawnSpecial(){
-  if(specialFood) return;
-  const token=TOKENS.find(t=>t.special&&t.img);
-  if(!token) return;
-  let p;
-  do{p=randPos();}while(snake.some(s=>s.x===p.x&&s.y===p.y));
-  specialFood={...p,token};
-  setTimeout(()=>{ if(specialFood){ specialFood=null; loseHeart(); } },5000);
-}
-setInterval(spawnSpecial,20000);
-
-/* ---------- SCORE BAR & FLOATING TEXT ---------- */
+/* ---------- BAR & HEARTS UI ---------- */
 function initBar(){
-  const bar=document.getElementById('bar');
-  bar.innerHTML='';
+  const bar = document.getElementById('bar');
   TOKENS.forEach(t=>{
-    if(t.special) return;
-    const itm=document.createElement('div'); itm.className='bar-item';
-    const img=new Image(); img.src=t.src; img.width=img.height=32;
-    itm.appendChild(img);
-    const span=document.createElement('span'); span.id='count-'+t.label; span.textContent='0';
-    itm.appendChild(span);
-    bar.appendChild(itm);
+    const span = document.createElement('span');
+    span.id = 'count-'+t.label;
+    span.textContent = '0';
+    span.style.color = t.color;
+    span.style.marginRight = '16px';
+    bar.appendChild(span);
   });
 }
 
-/* ---------- HEARTS UI ---------- */
+function updateBar(label){
+  if(label){
+    const s = document.getElementById('count-'+label);
+    if(s) s.textContent = counts[label].toString();
+  }else{
+    Object.keys(counts).forEach(l=>{
+      const s = document.getElementById('count-'+l);
+      if(s) s.textContent = counts[l].toString();
+    });
+  }
+}
+
+/* hearts */
 function initHearts(){
-  const heartsDiv=document.getElementById('hearts');
-  heartsDiv.innerHTML='';
-  document.getElementById('bar').appendChild(heartsDiv);
+  const heartsDiv = document.getElementById('hearts');
+  heartsDiv.innerHTML = '';
   for(let i=0;i<MAX_HEARTS;i++){
-    const img=new Image();
-    img.src='https://docs.monad.xyz/img/monad_logo.png';
-    img.className='heart';
+    const img = new Image();
+    img.src = 'https://docs.monad.xyz/img/monad_logo.png';
+    img.className = 'heart';
     heartsDiv.appendChild(img);
   }
 }
+
 function loseHeart(){
-  document.body.classList.add('shake'); setTimeout(()=>document.body.classList.remove('shake'),600);
   if(hearts<=0) return;
+  document.body.classList.add('shake');
+  setTimeout(()=>document.body.classList.remove('shake'),600);
+
   --hearts;
-  const heartsDiv=document.getElementById('hearts');
-  const heartImg=heartsDiv.children[hearts];
+  const heartsDiv = document.getElementById('hearts');
+  const heartImg  = heartsDiv.children[hearts];
   if(heartImg){
-    const rect=heartImg.getBoundingClientRect();
-    showFloat('-0.05 $MON', rect.left, rect.top);
-    heartImg.style.opacity='0';
+    const r = heartImg.getBoundingClientRect();
+    showFloat('-0.05 $MON', r.left, r.top);
+    heartImg.style.opacity = '0';
     setTimeout(()=>heartImg.remove(),4000);
   }
   if(hearts<=0){
-    alive=false;
+    alive = false;
   }
 }
-function updateBar(label){
-  const span=document.getElementById('count-'+label);
-  if(span){ span.textContent=counts[label].toString(); }
+
+/* ---------- GAME ENGINE ---------- */
+function startGame(){
+  snake = [{x:Math.floor(COLS/2), y:Math.floor(ROWS/2)}];
+  dir = {x:1,y:0};
+  nextDir = {...dir};
+  spawnFood();
+  specialTimer = 0;
+  loop();
 }
-function showFloat(text,px,py){
-  const d=document.createElement('div'); d.className='float';
-  d.style.left=px+'px'; d.style.top=py+'px'; d.textContent=text;
-  if(text.trim().startsWith('-')){d.style.color='red';}
-  document.body.appendChild(d);
-  requestAnimationFrame(()=>{d.style.transform='translateY(-40px)'; d.style.opacity='0';});
-  setTimeout(()=>d.remove(),1000);
+
+function spawnFood(){
+  let x,y;
+  do{
+    x = Math.floor(Math.random()*COLS);
+    y = Math.floor(Math.random()*ROWS);
+  }while(snake.some(p=>p.x===x&&p.y===y));
+  food = {x,y};
+}
+
+function update(){
+  if(!alive) return gameOver();
+
+  dir = nextDir;
+  const head = {x:(snake[0].x+dir.x+COLS)%COLS, y:(snake[0].y+dir.y+ROWS)%ROWS};
+
+  // collision with self
+  if(snake.some(p=>p.x===head.x&&p.y===head.y)){
+    alive = false;
+    return;
+  }
+
+  snake.unshift(head);
+
+  if(head.x===food.x && head.y===food.y){
+    const t = TOKENS[Math.floor(Math.random()*TOKENS.length)];
+    counts[t.label] += 1;
+    updateBar(t.label);
+    spawnFood();
+  }else{
+    snake.pop();
+  }
+
+  // special (heart miss mechanic)
+  if(++specialTimer >= 400){         // every 20 s (400*50ms)
+    specialTimer = 0;
+    if(Math.random()<0.5){           // 50% spawn a MON pickup that expires
+      const s = {x:food.x, y:food.y, ttl:1000};  // dummy; reuse food spot
+      setTimeout(()=>{
+        if(s.ttl>0){ loseHeart(); }  // not picked up
+      }, 5000);                      // 5 s
+    }
+  }
+}
+
+function draw(){
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // snake
+  ctx.fillStyle = '#0f0';
+  snake.forEach(p=>ctx.fillRect(p.x*CELL,p.y*CELL,CELL,CELL));
+
+  // food
+  ctx.fillStyle = '#ff0';
+  ctx.fillRect(food.x*CELL, food.y*CELL, CELL, CELL);
+}
+
+function loop(){
+  if(!alive) return;
+  const t0 = performance.now();
+  update();
+  draw();
+  const dt = performance.now()-t0;
+  setTimeout(loop, Math.max(0,STEP-dt));
+}
+
+/* ---------- FLOATING TEXT ---------- */
+function showFloat(text, px, py){
+  const div = document.createElement('div');
+  div.className = 'float';
+  div.textContent = text;
+  div.style.left = px+'px';
+  div.style.top  = py+'px';
+  if(text.trim().startsWith('-')) div.style.color = 'red';
+  document.body.appendChild(div);
+  requestAnimationFrame(()=>{div.style.transform='translateY(-40px)'; div.style.opacity='0';});
+  setTimeout(()=>div.remove(),1000);
 }
 
 /* ---------- INPUT ---------- */
-window.addEventListener('keydown',e=>{
+window.addEventListener('keydown', e=>{
   switch(e.key){
     case 'ArrowUp':
     case 'w': if(dir.y===0) nextDir={x:0,y:-1}; break;
     case 'ArrowDown':
-    case 's': if(dir.y===0) nextDir={x:0,y:1}; break;
+    case 's': if(dir.y===0) nextDir={x:0,y: 1}; break;
     case 'ArrowLeft':
     case 'a': if(dir.x===0) nextDir={x:-1,y:0}; break;
     case 'ArrowRight':
-    case 'd': if(dir.x===0) nextDir={x:1,y:0}; break;
+    case 'd': if(dir.x===0) nextDir={x: 1,y:0}; break;
+    default: break;
   }
 });
 
-/* ---------- GAME UPDATE/DRAW ---------- */
-function update(){
-  dir=nextDir;
-  const head={x:(snake[0].x+dir.x+COLS)%COLS, y:(snake[0].y+dir.y+ROWS)%ROWS};
-  if(snake.some((s,i)=>i && s.x===head.x && s.y===head.y)){ alive=false; return; }
-  snake.unshift(head);
-  if(food && head.x===food.x && head.y===food.y){
-    counts[food.token.label]+=food.token.inc;
-    updateBar(food.token.label);
-    if(food.token.text) showFloat(food.token.text, head.x*CELL, head.y*CELL);
-    score+=food.token.inc;
-    spawnFood();
-  }else if(specialFood && head.x===specialFood.x && head.y===specialFood.y){
-    counts[specialFood.token.label]+=specialFood.token.inc;
-    updateBar(specialFood.token.label);
-    if(specialFood.token.text) showFloat(specialFood.token.text, head.x*CELL, head.y*CELL);
-    score+=10;
-    specialFood=null;
-  }else{
-    snake.pop();
-  }
-}
-function draw(){
-  ctx.fillStyle='#000'; ctx.fillRect(0,0,canvas.width,canvas.height);
-  if(food) ctx.drawImage(food.token.img, food.x*CELL, food.y*CELL, CELL, CELL);
-  if(specialFood) ctx.drawImage(specialFood.token.img, specialFood.x*CELL, specialFood.y*CELL, CELL, CELL);
-  ctx.fillStyle='#0f0'; snake.forEach(s=>ctx.fillRect(s.x*CELL, s.y*CELL, CELL, CELL));
-  document.getElementById('score').textContent='Score: '+score.toFixed(0);
-}
-function gameLoop(ts){
-  if(!alive){ onGameOver(); return; }
-  if(ts - gameLoop.last > STEP){ update(); gameLoop.last=ts; }
-  draw(); requestAnimationFrame(gameLoop);
-}
-gameLoop.last=0;
-
-function startGame(){
-  resetGame();
-  spawnFood();
-  alive=true;
-  requestAnimationFrame(gameLoop);
-}
-
-/* ---------- GAME OVER ---------- */
-function onGameOver(){
+/* ---------- GAME OVER UI ---------- */
+function gameOver(){
   overlay.classList.remove('hidden');
-  connectPanel.classList.add('hidden');
-  payPanel.classList.add('hidden');
   gameoverPanel.classList.remove('hidden');
-  summaryP.textContent=`YAKI: ${counts.YAKI}, CHOG: ${counts.CHOG}, DAK: ${counts.DAK}`;
 }
 
+/* ---------- PLAY AGAIN BUTTON ---------- */
+restartBtn.onclick = () => location.reload();
 
-/* ---------- CLAIM TOKENS FROM GAME WALLET ---------- */
-// Replace with the private key of your game wallet (holds token balances & MON for gas)
-const GAME_PK = "0x9fc10d83a494011a9911e63dc18e634da61d15cb1cd7cf3b46ae59f0c7006d51";   // <— CHANGE ME
-
-async function claimTokens(){
-  if(!GAME_PK || GAME_PK.length !== 66){
-    alert("Server not configured: add GAME_PK in script.js");
-    return;
-  }
-  summaryP.textContent = "Preparing claims…";
-
-  try{
-    const gameWallet = new ethers.Wallet(GAME_PK, provider);
-    let txCount = await provider.getTransactionCount(gameWallet.address);
-
-    for (const t of TOKENS){
-      if(!t.address || counts[t.label] === 0) continue;
-      const contract = new ethers.Contract(t.address, ERC20_ABI, gameWallet);
-      let decimals = 18;
-      try { decimals = await contract.decimals(); }catch{}
-      const amount = ethers.parseUnits(counts[t.label].toString(), decimals);
-
-      const tx = await contract.transfer(userAddress, amount, { nonce: txCount++ });
-      await tx.wait();
-      // mark as sent so retries only send remaining
-      counts[t.label]=0; updateBar(t.label);
-    }
-    summaryP.textContent = "Tokens transferred — check wallet!";
-  }catch(err){
-    console.error(err);
-    summaryP.textContent = "Claim failed: "+ err.message;
-  }
-}
-
-
-/* ---------- BOOTSTRAP ---------- */
-connectBtn.onclick=connectWallet;
-payBtn.onclick=payToPlay;
-claimBtn.onclick=claimTokens;
-restartBtn.onclick=()=>{overlay.classList.remove('hidden'); connectPanel.classList.add('hidden'); payPanel.classList.remove('hidden'); gameoverPanel.classList.add('hidden');};
-
-await loadAssets();
+/* ---------- INITIAL PANELS ---------- */
 overlay.classList.remove('hidden');
-// Hide the score bar
- document.getElementById('score').style.display='none';
+connectPanel.classList.remove('hidden');
+payPanel.classList.add('hidden');
+gameoverPanel.classList.add('hidden');
