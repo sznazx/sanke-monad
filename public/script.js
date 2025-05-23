@@ -19,9 +19,13 @@ let TREASURY   = "0xD45005C45b8b6cBF642CB480A87e2C9e412B724E";
 
 /* ---------- TOKEN CONFIG ---------- */
 const TOKENS = [
-  { label:'DAK', inc:0.01, address:'0xb2f82D0f38dc453D596Ad40A37799446Cc89274A', decimals:18, color:'#ffbb33' },
-  { label:'CHOG',inc:0.01, address:'0xE0590015A873bF326bd645c3E1266d4db41C4E6B', decimals:18, color:'#3af' },
-  { label:'MON', inc:0.01, address:'0xaEef2f6B429Cb59C9B2D7bB2141ADa993E8571c3', decimals:18, color:'#e33' }
+  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/6679b698-a845-412b-504b-23463a3e1900/public',
+    label:'YAKI', inc:1, text:'+1 $YAKI', address:'0xfe140e1dCe99Be9F4F15d657CD9b7BF622270C50', img:null },
+  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/5d1206c2-042c-4edc-9f8b-dcef2e9e8f00/public',
+    label:'CHOG', inc:1, text:'+1 $CHOG', address:'0xE0590015A873bF326bd645c3E1266d4db41C4E6B', img:null },
+  { src:'https://imagedelivery.net/tWwhAahBw7afBzFUrX5mYQ/27759359-9374-4995-341c-b2636a432800/public',
+    label:'DAK',  inc: 0.01, text:'+0.01 $DAK',  address:'0x0F0BDEbF0F83cD1EE3974779Bcb7315f9808c714', img:null },
+  { src:'https://docs.monad.xyz/img/monad_logo.png', label:'MON', inc:0.01, text:'',address:null,img:null,special:true }
 ];
 
 /* ---------- RUNTIME CONFIG (/.env via server) ---------- */
